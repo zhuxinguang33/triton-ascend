@@ -83,7 +83,7 @@ def _get_then_remove_rc(mod, attr_name: str) -> int:
 
     if remove_attr:
         remove_attr(mod, attr_name)
-    
+
     if not isinstance(attr_value, int):
         return -1
 
@@ -230,7 +230,12 @@ def ttir_to_linalg(mod, metadata, opt, *, named_ops=False):
             # AddMultiBufferInnerScope pass reads the module-level
             # `ssbuffer.insertionOptimization` attribute (set here) at run time.
             ascend.passes.ttir.set_enable_buffer_insert_optimization(mod, metadata["enable_buffer_insert_optimization"])
-            ascend.passes.ttir.add_dynamic_cv_pipeline(pm, compile_on_910_95)
+
+            aicore_num = -1
+            if _is_auto_map_parallel_blocks_enabled() and not metadata.get("has_auto_blockify_blacklist_op", False):
+                npu_utils = NPUUtils()
+                aicore_num = npu_utils.get_aicore_num()
+            ascend.passes.ttir.add_dynamic_cv_pipeline(pm, compile_on_910_95, aicore_num)
 
         _intra_val = metadata.get("intra_cache_num")
         if _intra_val is not None:
@@ -603,7 +608,8 @@ def linalg_to_bin_enable_npu_compile_910_95(linalg: str, metadata, opt):
                     [f"--link-aicore-bitcode={bitcode}"]
 
         if _is_auto_map_parallel_blocks_enabled() and not metadata.get("has_auto_blockify_blacklist_op", False):
-            _compile_option_list += ["--enable-auto-blockify-loop"]
+            if not metadata.get("enable_dynamic_cv_pipeline", False):
+                _compile_option_list += ["--enable-auto-blockify-loop"]
         npu_compiler_path, env = _get_npucompiler_path()
         if npu_compiler_path.endswith("bishengir-compile"):
             _compile_option_list += [
