@@ -113,6 +113,14 @@ static void attachTransferTags(Operation *op, int blockId, StringRef coreType, i
     op->setAttr(CVPipeline::kTransferId, IntegerAttr::get(IntegerType::get(ctx, kIntegerBitWidth), transferId));
 }
 
+static void attachMemCrossDeps(Operation *op, int tid, int seqId, OpBuilder &builder)
+{
+    op->setAttr(CVPipeline::kMemCrossDeps, builder.getArrayAttr({
+                    builder.getI32IntegerAttr(tid),
+                    builder.getI32IntegerAttr(seqId)
+                }));
+}
+
 static void attachAnalyzeFlagIdTag(Operation *op)
 {
     MLIRContext *ctx = op->getContext();
@@ -1200,7 +1208,10 @@ LogicalResult InterCoreTransferAndSyncPass::handleMemoryDependency(OpBuilder &bu
             dep.consumerBlockId << "\n");
         return success();
     }
-
+    int predId = 1;
+    int nextId = 0;
+    attachMemCrossDeps(dep.predOp, transferIndex, predId, builder);
+    attachMemCrossDeps(dep.nextOp, transferIndex, nextId, builder);
     // Get flag ID
     int flagId = flagManager.acquireId(prodStart);
 

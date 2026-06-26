@@ -542,7 +542,8 @@ void DataDependencyAnalysisPass::analyzeExternalOutputs(DataDependencyInfo &info
 void DataDependencyAnalysisPass::collectMemDepInfo(
     llvm::StringRef predCoreType,
     int producerBlockId, int consumerBlockId, int predBlockId, int currBlockId,
-    llvm::SmallVector<DependencyInfo> &memoryDependencies)
+    llvm::SmallVector<DependencyInfo> &memoryDependencies,
+    mlir::Operation *predOp, mlir::Operation *nextOp)
 {
     DependencyInfo depInfo;
 
@@ -555,6 +556,9 @@ void DataDependencyAnalysisPass::collectMemDepInfo(
     depInfo.consumerBlockId = consumerBlockId;
     depInfo.iniProducerBlockId = predBlockId;
     depInfo.iniConsumerBlockId = currBlockId;
+
+    depInfo.predOp = predOp;
+    depInfo.nextOp = nextOp;
 
     memoryDependencies.push_back(depInfo);
 }
@@ -605,7 +609,7 @@ void DataDependencyAnalysisPass::analyzeMemoryEffect(DataDependencyInfo &info)
                         LOG_DEBUG("Could not find common level block IDs for producer and consumer blocks");
                         signalPassFailure();
                     }
-                    collectMemDepInfo(realPredCoreType, producerBlockId, consumerBlockId, realPredBlockId, currBlockId, memoryDependencies);
+                    collectMemDepInfo(realPredCoreType, producerBlockId, consumerBlockId, realPredBlockId, currBlockId, memoryDependencies, realPredOp, op);
 
                     LOG_DEBUG("\n=op with region mem dep analysis= "
                         << "\nrealpredcoretype" << realPredCoreType
@@ -630,7 +634,8 @@ void DataDependencyAnalysisPass::analyzeMemoryEffect(DataDependencyInfo &info)
                 continue;
             }
 
-            collectMemDepInfo(predCoreType, producerBlockId, consumerBlockId, predBlockId, currBlockId, memoryDependencies);
+            collectMemDepInfo(predCoreType, producerBlockId, consumerBlockId, predBlockId, currBlockId, memoryDependencies,
+                              predOp, op);
 
             LOG_DEBUG("\n=mem dep analysis= "
                 << "\npredcoretype" << predCoreType
