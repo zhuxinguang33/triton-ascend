@@ -57,13 +57,14 @@ struct ControlFlowConditionInfo {
   llvm::DenseMap<scf::ForOp, SmallVector<int>> innerDepConds;
 
   llvm::DenseMap<Value, SmallVector<Value>> crossCoreDependentMap;
+  llvm::DenseMap<Operation*, SmallVector<Operation*>> memCrossCoreDependentMap;
   llvm::DenseMap<scf::ForOp, llvm::DenseMap<Value, SmallVector<Value>>> intraCoreDependentMap;
   // Used to store the producer/consumer relationship between the tensor type iter_args in the main_loop and ssbuffer.if
   // Note: vector index corresponds to iter arg index in the for op
   llvm::DenseMap<scf::ForOp, llvm::SmallVector<TensorIterArgIfOpRelation>> tensorIterArgDepsMap;
   // Used to record the index of the control condition variable for the newly created iter_args for tensor iter_args
   llvm::DenseMap<scf::ForOp, llvm::DenseMap<Value, SmallVector<int>>> tensorIterArgIndicesMap;
-  
+
   // unique counter value for each ifblock
   llvm::DenseMap<scf::IfOp, Value> cntArgs;
 };
