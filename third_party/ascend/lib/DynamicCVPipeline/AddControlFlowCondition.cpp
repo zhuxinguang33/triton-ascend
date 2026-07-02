@@ -25,6 +25,7 @@
 #include "ascend/include/DynamicCVPipeline/AddControlFlowCondition/CreateIfOps.h"
 #include "ascend/include/DynamicCVPipeline/AddControlFlowCondition/InitDependentMap.h"
  #include "ascend/include/DynamicCVPipeline/AddControlFlowCondition/ProcessArgs.h"
+#include "ascend/include/DynamicCVPipeline/AddControlFlowCondition/PreloadOpt.h"
 #include "ascend/include/DynamicCVPipeline/AddControlFlowCondition/UpdateConditionInfo.h"
 #include "ascend/include/DynamicCVPipeline/AddControlFlowCondition/UpdateForOps.h"
 #include "ascend/include/DynamicCVPipeline/AddControlFlowCondition/UpdateLoopIterTimes.h"
@@ -107,7 +108,12 @@ void AddControlFlowConditionPass::runOnOperation()
   updatePass->setConditionInfo(&info);
   pm.addPass(std::move(updatePass));
 
-  // Step6: Update for loop iteration times based on intraCoreDependentMap
+  // Step6: Apply preload optimization for preload buffers
+  std::unique_ptr<PreloadOptPass> preloadOptPass(new PreloadOptPass());
+  preloadOptPass->setConditionInfo(&info);
+  pm.addPass(std::move(preloadOptPass));
+
+  // Step7: Update for loop iteration times based on intraCoreDependentMap
   std::unique_ptr<UpdateLoopIterTimesPass> updateLoopIterTimesPass(new UpdateLoopIterTimesPass());
   updateLoopIterTimesPass->setConditionInfo(&info);
   pm.addPass(std::move(updateLoopIterTimesPass));
@@ -134,6 +140,7 @@ void registerAddControlFlowConditionPasses()
     registerPass(createCreateIfOpsPass);
     registerPass(createProcessArgsPass);
     registerPass(createUpdateForOpsPass);
+    registerPass(createPreloadOptPass);
     registerPass(createAddControlFlowConditionPass);
 }
 } // namespace triton

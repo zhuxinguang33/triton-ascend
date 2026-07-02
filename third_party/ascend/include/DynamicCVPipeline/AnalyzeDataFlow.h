@@ -121,12 +121,28 @@ public:
   }
 };
 
+// Pass for analyzing preload optimization
+class AnalyzePreloadPass : public PassWrapper<AnalyzePreloadPass, OperationPass<ModuleOp>> {
+public:
+  MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID(AnalyzePreloadPass)
+
+  AnalyzePreloadPass() = default;
+
+  void runOnOperation() override;
+
+  llvm::StringRef getArgument() const override { return "analyze-preload"; }
+  llvm::StringRef getDescription() const override {
+    return "Analyze and mark preload optimization for main_loop forOps";
+  }
+};
+
 std::unique_ptr<OperationPass<ModuleOp>> createAnalyzeArgsPass();
 std::unique_ptr<OperationPass<ModuleOp>> createAnalyzeFlagPass();
 std::unique_ptr<OperationPass<ModuleOp>> createAnalyzeNamePass();
 std::unique_ptr<OperationPass<ModuleOp>> createAnalyzeCubeContolFLowInputChainPass();
 std::unique_ptr<OperationPass<ModuleOp>> createAnalyzeDataFlowPass();
 std::unique_ptr<OperationPass<ModuleOp>> createAnalyzeScopePass();
+std::unique_ptr<OperationPass<ModuleOp>> createAnalyzePreloadPass();
 
 void registerAnalyzeDataFlowPasses();
 

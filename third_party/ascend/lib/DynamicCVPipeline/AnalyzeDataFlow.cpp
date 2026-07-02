@@ -47,6 +47,8 @@ void AnalyzeDataFlowPass::runOnOperation()
 
   pm.addPass(createAnalyzeFlagPass());
 
+  pm.addPass(createAnalyzePreloadPass());
+
   pm.addPass(createAnalyzeCubeContolFLowInputChainPass());
 
   if (failed(runPipeline(pm, module))) {
@@ -72,6 +74,7 @@ void registerAnalyzeDataFlowPasses()
   registerPass(createAnalyzeScopePass);
   registerPass(createAnalyzeDataFlowPass);
   registerPass(createAnalyzeCubeContolFLowInputChainPass);
+  registerPass(createAnalyzePreloadPass);
 }
 
 } // namespace triton
