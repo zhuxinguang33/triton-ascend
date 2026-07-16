@@ -81,7 +81,7 @@ static void logOutputGroupValues(llvm::StringRef label,
 }
 
 // Allocate the SSBuffer pointer
-SmallVector<SmallVector<Value>>
+std::optional<SmallVector<SmallVector<Value>>>
 UpdateConditionInfoPass::allocSSBuffer(ModuleOp module) {
   OpBuilder builder(module.getContext());
   auto i64Type = builder.getIntegerType(ADDR_INT_TYPE);
@@ -99,7 +99,7 @@ UpdateConditionInfoPass::allocSSBuffer(ModuleOp module) {
                    info->memCrossCoreDependentMap.size();
   if (numBuffers == 0) {
     LDBG("crossCoreDependentMap is empty!" << "\n");
-    return ssbufferPtrs;
+    return std::nullopt;
   }
 
   module->walk([&](Operation *op) {
@@ -136,6 +136,12 @@ UpdateConditionInfoPass::allocSSBuffer(ModuleOp module) {
     }
     return mlir::WalkResult::advance();
   });
+
+  // Check if ssbufferVec0Ptrs is empty
+  if (ssbufferVec0Ptrs.empty() || ssbufferVec1Ptrs.empty()) {
+    LDBG("no ssbuffer address is allocated!" << "\n");
+    return std::nullopt;
+  }
 
   ssbufferPtrs.push_back(ssbufferVec0Ptrs);
   ssbufferPtrs.push_back(ssbufferVec1Ptrs);
@@ -1875,7 +1881,13 @@ void UpdateConditionInfoPass::runOnOperation() {
 
   LDBG("Enter UpdateConditionInfo pass." << "\n");
   // Step1:Init the ssbufferPtrs
-  SmallVector<SmallVector<Value>> ssbufferPtrs = allocSSBuffer(module);
+  auto ssbufferPtrsOpt = allocSSBuffer(module);
+  if (!ssbufferPtrsOpt) {
+    LDBG("allocSSBuffer failed!" << "\n");
+    CVPipeline::setFallbackAttr(module, CVPipeline::ERRCODE_FAILED);
+    return;
+  }
+  SmallVector<SmallVector<Value>> ssbufferPtrs = std::move(*ssbufferPtrsOpt);
 
   // Step2:Update the conditions of ifOp based on the intraCoreDependentMap and
   // crossCoreDependentMap

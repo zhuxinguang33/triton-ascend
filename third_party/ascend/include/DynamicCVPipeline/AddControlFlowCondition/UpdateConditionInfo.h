@@ -55,7 +55,7 @@ public:
   void setConditionInfo(ControlFlowConditionInfo *info) { this->info = info; }
 
 private:
-  SmallVector<SmallVector<Value>> allocSSBuffer(ModuleOp module);
+  std::optional<SmallVector<SmallVector<Value>>> allocSSBuffer(ModuleOp module);
 
   int updateIfConds(ModuleOp module,
                     SmallVector<SmallVector<Value>> ssbufferPtrs);

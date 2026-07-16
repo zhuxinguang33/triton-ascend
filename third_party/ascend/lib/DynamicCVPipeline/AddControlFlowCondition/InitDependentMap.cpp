@@ -56,6 +56,10 @@ using namespace triton;
 static int isConsumerInMainLoop(Operation *consumer, scf::ForOp mainLoop,
                                 SmallVector<Operation *> &consumers) {
   Operation *current = consumer->getParentOp();
+  if (!current) {
+    LDBG("consumer does not have parentOp!\n");
+    return -1;
+  }
 
   // Traverse up the parent chain until we reach the top (nullptr)
   while (current != nullptr) {
