@@ -140,21 +140,24 @@ private:
       mlir::OpBuilder &builder, mlir::Value srcValue,
       mlir::Value normalizedValue, mlir::Operation *vectorEndOp,
       mlir::Operation *cubeStartOp, mlir::Location loc, int transferIndex,
-      int iniConsumerId, bool isScaler, bool is1DTensor,
+      DependencyInfo &dep, bool is1DTensor,
       mlir::Operation **consumedDataOp = nullptr);
-  mlir::Operation *insertCubeToVectorTransfer(
-      mlir::OpBuilder &builder, mlir::Value srcValue,
-      mlir::Operation *cubeEndOp, mlir::Operation *vectorStartOp,
-      mlir::Location loc, int transferIndex, int iniConsumerId,
-      bool isAllTranspoesd, mlir::Operation **consumedDataOp = nullptr);
-  TransferPipeConfig getTransferPipeConfig(Operation *transferOp);
+  mlir::Operation *
+  insertCubeToVectorTransfer(mlir::OpBuilder &builder, mlir::Value srcValue,
+                             mlir::Operation *cubeEndOp,
+                             mlir::Operation *vectorStartOp, mlir::Location loc,
+                             int transferIndex, DependencyInfo &dep,
+                             mlir::Operation **consumedDataOp = nullptr);
+  TransferPipeConfig getTransferPipeConfig(Operation *transferOp,
+                                           bool isStoreDirectly = false);
   void insertInterCoreSync(mlir::OpBuilder &builder,
                            mlir::Operation *transferOp,
                            mlir::Operation *consumerStartOp,
                            mlir::Operation *consumerEndOp, int flag,
                            mlir::Location loc, int transferIndex,
                            FlagIdReuseManager &flagIdReuseManager,
-                           mlir::Operation *consumedDataOp = nullptr);
+                           mlir::Operation *consumedDataOp = nullptr,
+                           bool isStoreDirectly = false);
   void insertMemDepSync(mlir::OpBuilder &builder, mlir::Operation *producerOp,
                         mlir::Operation *consumerOp, int flag,
                         mlir::Location loc, bool isCubeToVector,
@@ -165,6 +168,7 @@ private:
   insertAnalyzeFlagRelations(mlir::ModuleOp module,
                              FlagIdReuseManager &flagIdReuseManager);
   void remapInterCoreTransferFlagIds(llvm::DenseMap<int, int> &remapResult);
+  bool isStoreDirectlyInUserChain(mlir::Value toTensorValue);
 };
 
 std::unique_ptr<OperationPass<ModuleOp>> createInterCoreTransferAndSyncPass();

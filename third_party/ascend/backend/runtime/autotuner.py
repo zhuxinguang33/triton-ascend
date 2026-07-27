@@ -42,7 +42,7 @@ from torch import Tensor
 
 import triton
 from triton.runtime.autotuner import Autotuner, Config
-from triton.tools.get_ascend_devices import is_compile_on_910_95
+from triton.backends.ascend.utils import is_compile_on_910_95
 
 from .autoparser import (LowDimsAxesParser, PtrNumsParser, ReductionAxesParser, SplitAxesParser, TilingAxesParser)
 from .dsl_analysis.cv_param_parser import parse_cv_params
@@ -285,7 +285,7 @@ class AutoTilingTuner(Autotuner):
         self.user_specified_warps = None
         self.user_specified_num_stages = None
         self.user_specified_multibuffer = None
-        self.default_multibuffer = not is_compile_on_910_95
+        self.default_multibuffer = not is_compile_on_910_95()
         self.print_autotuning = os.getenv("TRITON_PRINT_AUTOTUNING", None) == "1"
 
         # Mark the original function so ubtuner can detect autotune was applied
@@ -524,6 +524,48 @@ class AutoTilingTuner(Autotuner):
             })
 
         return axis_arg_names
+
+    def _bench(self, *args, config, **meta):
+        from triton.compiler.errors import CompileTimeAssertionFailure, MLIRCompilationError
+
+        verbose = knobs.autotuning.print
+        if verbose:
+            print(f"Autotuning kernel {self.base_fn.__name__} with config {config}")
+
+        # check for conflicts, i.e. meta-parameters both provided
+        # as kwargs and by the autotuner
+        conflicts = meta.keys() & config.kwargs.keys()
+        if conflicts:
+            raise ValueError(f"Conflicting meta-parameters: {', '.join(conflicts)}."
+                             " Make sure that you don't re-define auto-tuned symbols.")
+        # augment meta-parameters with tunable ones
+        current = dict(meta, **config.all_kwargs())
+        full_nargs = {**self.nargs, **current}
+
+        def kernel_call():
+            if config.pre_hook:
+                config.pre_hook(full_nargs)
+            self.pre_hook(full_nargs)
+            try:
+                self.fn.run(
+                    *args,
+                    **current,
+                )
+            except Exception as e:
+                try:
+                    self.post_hook(full_nargs, exception=e)
+                finally:
+                    # Throw exception raised by `self.fn.run`
+                    raise
+
+            self.post_hook(full_nargs, exception=None)
+
+        try:
+            return self.do_bench(kernel_call, quantiles=(0.5, 0.2, 0.8))
+        except (OutOfResources, CompileTimeAssertionFailure, MLIRCompilationError) as e:
+            if verbose:
+                print(f"Autotuning failed with {e}")
+            return [float("inf"), float("inf"), float("inf")]
 
     def _promote_axis_arg_name_to_reduction(self, axis):
         axis = self._get_axis_base_name(axis)
