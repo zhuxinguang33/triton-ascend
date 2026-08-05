@@ -398,6 +398,13 @@ static bool isOutputFilter(linalg::MatmulOp matmulOp, Value &outerOutValue, Valu
     auto usedByL0C =
         traceChainUser(outerOutValue, true, matchMatmulC, [](Operation *op, Value value) { return false; });
     if (usedByL0C.has_value() && usedByL0C.value()->getBlock() != outerOutValue.getParentBlock()) {
+        auto parentFor = matmulOp->getParentOfType<scf::ForOp>();
+        if (parentFor) {
+            parentFor->setAttr("fixpipe_for_mmad_result_already_inserted", 
+                                mlir::BoolAttr::get(matmulOp->getContext(), true));
+            LOG_DEBUG("Marked parallel for loop with fixpipe_for_mmad_result_already_inserted=True. " << matmulOp);
+            return false;
+        }
         LOG_DEBUG("(first) Split because avoiding NPUIR insert fixpipe errors. " << matmulOp);
         return true;
     }
@@ -423,6 +430,7 @@ static bool shouldSplitByOutput(linalg::MatmulOp matmulOp, Value &outerOutValue,
         return true;
     }
 
+    LOG_DEBUG("shouldSplitByOutput");
     return false;
 }
 
@@ -448,6 +456,12 @@ static bool isInputFilter(linalg::MatmulOp matmulOp, Value &outerOutValue, Value
     if (defMatmul) {
         auto defInMatmulBlock = CVPipeline::getAncestorInBlock(defMatmul, matmulOp->getBlock());
         if (!defInMatmulBlock) {
+            auto parentFor = matmulOp->getParentOfType<scf::ForOp>();
+            if (parentFor) {
+                parentFor->setAttr("fixpipe_for_mmad_result_already_inserted", 
+                                   mlir::BoolAttr::get(matmulOp->getContext(), true));
+                return false;
+            }
             LOG_DEBUG("(Second) Split because avoiding NPUIR insert fixpipe errors. " << matmulOp);
             return true;
         }
@@ -522,7 +536,30 @@ static std::optional<SplitInfo> handleMayNotExec(linalg::MatmulOp matmulOp)
     }
     auto initVal = forOp.getTiedLoopInit(blockArg)->get();
     auto result = forOp.getTiedLoopResult(blockArg);
-    return SplitInfo {true, initVal, result, true};
+    
+    // Check if matmul output is used by store operation
+    auto matchStoreGm = [](Operation *op, Value value) {
+        if (auto nextStoreGM = dyn_cast<bufferization::MaterializeInDestinationOp>(op)) {
+            Value dest = nextStoreGM.getDest();
+            auto viewOp = dest.getDefiningOp<ViewLikeOpInterface>();
+            return isSubviewFromGlobalMemory(viewOp);
+        } else if (auto hivmStore = dyn_cast<hivm::StoreOp>(op)) {
+            auto dest = hivmStore.getDst();
+            auto viewOp = dest.getDefiningOp<ViewLikeOpInterface>();
+            return isSubviewFromGlobalMemory(viewOp);
+        }
+        return false;
+    };
+    auto storeToGM = traceChainUser(result, false, matchStoreGm, [](Operation *op, Value value) { return false; });
+    
+    // If used by store, split; otherwise continue to other logic
+    if (storeToGM.has_value()) {
+        return SplitInfo {true, initVal, result, true};
+    }
+    
+    // Not used by store, continue to other logic
+    LOG_DEBUG("Matmul output not used by store, continue to other logic. " << matmulOp);
+    return std::nullopt;
 }
 
 /**
@@ -574,6 +611,21 @@ static std::optional<SplitInfo> shouldSplit(linalg::MatmulOp matmulOp, bool need
         }
     }
 
+    // Check if matmul is used by subsequent L0C, if so set mayNotExec to false
+    auto matchMatmulC = [](Operation *op, Value value) {
+        if (auto nextMatmulOp = dyn_cast<linalg::MatmulOp>(op)) {
+            auto inputs = parseMatmulInputs(nextMatmulOp);
+            return inputs.a != value && inputs.b != value && inputs.bias == value;
+        }
+        return false;
+    };
+    auto usedByL0C = traceChainUser(outerOutValue, true, matchMatmulC, [](Operation *op, Value value) { return false; });
+    if (usedByL0C.has_value()) {
+        auto forOp = matmulOp->getParentOfType<scf::ForOp>();
+        forOp->setAttr("tempAttr", UnitAttr::get(forOp->getContext()));
+        mayNotExec = false;
+    }
+
     if (!shouldSplitByInput(matmulOp, outerOutValue, outerInValue) &&
         !shouldSplitByOutput(matmulOp, outerOutValue, outerInValue))
     {
@@ -583,7 +635,57 @@ static std::optional<SplitInfo> shouldSplit(linalg::MatmulOp matmulOp, bool need
     return SplitInfo {mayNotExec, outerInValue, outerOutValue, true};
 }
 
-static LogicalResult splitMatmul(linalg::MatmulOp matmulOp, PatternRewriter &rewriter, SplitInfo splitInfo)
+/**
+ * Handles the mayNotExec case by creating select operations.
+ * This function creates a select operation to choose between the actual result
+ * and a zero-filled result based on whether the loop will execute.
+ * 
+ * Returns the select result if mayNotExec is handled, otherwise returns the original outerOutValue.
+ */
+static Value handleMayNotExecSelect(linalg::MatmulOp matmulOp, PatternRewriter &rewriter, 
+                                     SplitInfo &splitInfo, bool replaceUses = true)
+{
+    auto forOp = llvm::dyn_cast_if_present<scf::ForOp>(splitInfo.outerOutValue.getDefiningOp());
+    if (!forOp) {
+        return splitInfo.outerOutValue;
+    }
+    
+    auto outputType = dyn_cast<RankedTensorType>(parseMatmulInputs(matmulOp).bias.getType());
+    if (!outputType) {
+        return splitInfo.outerOutValue;
+    }
+    auto elmType = outputType.getElementType();
+    Location loc = matmulOp.getLoc();
+    
+    rewriter.setInsertionPointAfterValue(splitInfo.outerOutValue);
+    
+    auto lb = forOp.getLowerBound();
+    auto ub = forOp.getUpperBound();
+    
+    Value executed = rewriter.create<arith::CmpIOp>(loc, arith::CmpIPredicate::sgt, ub, lb);
+    Value zeroValue;
+    if (auto floatType = dyn_cast<FloatType>(elmType)) {
+        APFloat zeroAPFloat = APFloat::getZero(floatType.getFloatSemantics());
+        zeroValue = rewriter.create<arith::ConstantFloatOp>(loc, zeroAPFloat, floatType).getResult();
+    } else if (auto intType = dyn_cast<IntegerType>(elmType)) {
+        zeroValue = rewriter.create<arith::ConstantIntOp>(loc, 0, intType).getResult();
+    }
+    auto fillOp = rewriter.create<linalg::FillOp>(loc, zeroValue, splitInfo.outerOutValue);
+    auto selectOp = rewriter.create<arith::SelectOp>(loc, executed, splitInfo.outerOutValue, fillOp.getResult(0));
+    
+    if (replaceUses) {
+        // Replace uses of outerOutValue with select result, except for the select and fill operations
+        splitInfo.outerOutValue.replaceUsesWithIf(
+            selectOp.getResult(), 
+            [&](OpOperand &operand) { return operand.getOwner() != selectOp && operand.getOwner() != fillOp; });
+    }
+    
+    forOp->setAttr(CVPipeline::kHIVMMatmulLimitedInCubeAttr, rewriter.getUnitAttr());
+    
+    return selectOp.getResult();
+}
+
+static LogicalResult splitMatmul(linalg::MatmulOp matmulOp, PatternRewriter &rewriter, SplitInfo &splitInfo)
 {
     auto outputType = dyn_cast<RankedTensorType>(parseMatmulInputs(matmulOp).bias.getType());
     if (!outputType) {
@@ -717,6 +819,7 @@ LogicalResult SplitMatmulPattern::matchAndRewrite(linalg::MatmulOp matmulOp, Pat
 
     if (splitInfo.mayNotExec) {
         matmulOp->setAttr(CVPipeline::kMayNotExec, rewriter.getUnitAttr());
+        handleMayNotExecSelect(matmulOp, rewriter, splitInfo);
     }
 
     return success();

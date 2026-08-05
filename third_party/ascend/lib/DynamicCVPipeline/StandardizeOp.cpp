@@ -60,11 +60,11 @@ void StandardizeOpPass::runOnOperation()
         }
     });
 
-    if (findMayNotExec) {
-        LOG_DEBUG("Matmul may not execute!");
-        CVPipeline::setFallbackAttr(op);
-        signalPassFailure();
-    }
+    // if (findMayNotExec) {
+    //     LOG_DEBUG("Matmul may not execute!");
+    //     CVPipeline::setFallbackAttr(op);
+    //     signalPassFailure();
+    // }
 }
 
 std::unique_ptr<OperationPass<ModuleOp>> createStandardizeOpPass()
