@@ -77,21 +77,22 @@ void cloneScalarOpsForCrossBlockUses(ComputeBlockIdManager &bmOriginal,
                                      int targetBlockId);
 
 /**
- * @brief Check if a view-like operation originates from global memory (GM)
+ * @brief Check if a value originates from global memory (GM) and collect
+ * viewOps
  *
  * Traces back through nested view-like operations (subview, reinterpret_cast,
  * etc.) to determine if the source is a function argument (block argument in
  * the entry block). Only view-like operations in the same block as the input
  * viewOp are collected.
  *
- * @param viewOp The view-like operation to check
+ * @param viewValue The value to check
  * @param matchedOps SetVector to collect all same-block view-like operations in
  * the trace
  * @return bool Returns true if the source is from global memory (function
  * argument), false otherwise
  */
-bool isSubviewFromGlobalMemory(ViewLikeOpInterface viewOp,
-                               SetVector<Operation *> &matchedOps);
+bool collectViewOpsAndCheckGlobalMemory(Value viewValue,
+                                        SetVector<Operation *> &matchedOps);
 
 } // namespace CVPipeline
 } // namespace mlir

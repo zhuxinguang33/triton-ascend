@@ -37,10 +37,18 @@ public:
       : OpRewritePattern<linalg::MatmulOp>(context),
         needSplitAll(needSplitAll) {}
   llvm::LogicalResult matchAndRewrite(linalg::MatmulOp matmulOp,
-                                      PatternRewriter &rewriter) const override;
+                                       PatternRewriter &rewriter) const override;
 
 private:
   bool needSplitAll;
+};
+
+class FoldExpandExtCollapse
+    : public mlir::OpRewritePattern<mlir::tensor::CollapseShapeOp> {
+public:
+  using OpRewritePattern<mlir::tensor::CollapseShapeOp>::OpRewritePattern;
+  llvm::LogicalResult matchAndRewrite(mlir::tensor::CollapseShapeOp collapseOp,
+                                       PatternRewriter &rewriter) const override;
 };
 
 class PatternMatchRewritePass

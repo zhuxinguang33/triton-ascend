@@ -65,8 +65,6 @@ inline constexpr llvm::StringLiteral kDepMark = "ssbuffer.dep_mark";
 inline constexpr llvm::StringLiteral kMayNotExec = "ssbuffer.may_not_exec";
 inline constexpr llvm::StringLiteral kIterCounter = "ssbuffer.iterCounter";
 inline constexpr llvm::StringLiteral kClone = "ssbuffer.clone";
-inline constexpr llvm::StringLiteral kEnableUbRefineOpt =
-    "ssbuffer.enable_ub_refine_opt";
 inline constexpr llvm::StringLiteral kInsertionOptimization =
     "ssbuffer.insertionOptimization";
 inline constexpr llvm::StringLiteral kArg = "ssbuffer.arg";

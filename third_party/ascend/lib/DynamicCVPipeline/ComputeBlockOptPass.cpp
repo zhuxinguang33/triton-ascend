@@ -25,6 +25,7 @@
 #include "DynamicCVPipeline/PlanComputeBlock/Passes.h"
 #include "DynamicCVPipeline/PlanComputeBlock/ReorderOpsByBlockId.h"
 #include "ascend/include/DynamicCVPipeline/Common/Utils.h"
+#include "ascend/include/DynamicCVPipeline/ComputeBlockOpt/Passes.h"
 #include "ascend/include/DynamicCVPipeline/PlanComputeBlockPass.h"
 
 #include "mlir/Pass/PassManager.h"
@@ -48,25 +49,27 @@ void ComputeBlockOptPass::runOnOperation() {
    */
   pm.addPass(createUnifyAllocBlockPass());
   pm.addPass(createReorderOpsByBlockIdPass());
-
+  
   pm.addPass(createMergeVectorIfBlockPass());
   pm.addPass(createReorderOpsByBlockIdPass());
-
-  pm.addPass(createUnifyStoreBlockPass());
-
   pm.addPass(createMergeCubeForBlockPass());
   pm.addPass(createReorderOpsByBlockIdPass());
-
+  
   pm.addPass(createUBUsageOptPass());
+  pm.addPass(createBroadcastUBOptPass());
   pm.addPass(createMergeSameSourceAxisPass());
   pm.addPass(createReorderOpsByBlockIdPass());
-
+  pm.addPass(createMergeSmallBlockPass());
+  pm.addPass(createReorderOpsByBlockIdPass());
+  
+  pm.addPass(createSinkI1ProducersIntoUsersPass());
+  pm.addPass(createReorderOpsByBlockIdPass());
+  
   pm.addPass(createFixpipeOptPass());
   pm.addPass(createReorderOpsByBlockIdPass());
-
-  pm.addPass(createSinkI1ProducersIntoUsersPass());
-  pm.addPass(createBroadcastUBOptPass());
   pm.addPass(createMoveLoadIntoUserPass());
+  pm.addPass(createUnifyStoreBlockPass());
+  pm.addPass(createReorderOpsByBlockIdPass());
 
   if (failed(runPipeline(pm, module))) {
     if (!CVPipeline::hasFallbackAttr(module)) {
@@ -97,6 +100,7 @@ void registerComputeBlockOptPasses() {
   registerPass(createSinkI1ProducersIntoUsersPass);
   registerPass(createBroadcastUBOptPass);
   registerPass(createMoveLoadIntoUserPass);
+  registerPass(createMergeSmallBlockPass);
 }
 
 } // namespace triton

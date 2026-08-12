@@ -63,12 +63,14 @@ private:
   struct LoadPatternInfo {
     SmallVector<Operation *> matchedOps;
     int commonBlockId;
+    bufferization::ToTensorOp toTensorOp;
+    memref::CopyOp copyOp;
+    memref::AllocOp allocOp;  // destination
   };
 
-  bool matchLoadPattern(memref::CopyOp copyOp,
-                        SmallVector<Operation *> &matchedOps);
+  bool matchLoadPattern(LoadPatternInfo &info);
 
-  bool checkAllOpsInSameBlock(ArrayRef<Operation *> ops,
+  bool checkAllOpsInSameBlock(LoadPatternInfo &info,
                               CVPipeline::ComputeBlockIdManager &bm);
 };
 
@@ -135,13 +137,13 @@ getFirstUser(bufferization::ToTensorOp toTensorOp,
 }
 
 bool MoveLoadIntoUserPass::checkAllOpsInSameBlock(
-    ArrayRef<Operation *> ops, CVPipeline::ComputeBlockIdManager &bm) {
-  if (ops.empty()) {
+    LoadPatternInfo &info, CVPipeline::ComputeBlockIdManager &bm) {
+  if (info.matchedOps.empty()) {
     return false;
   }
 
   int commonBlockId = -1;
-  for (auto *op : ops) {
+  for (auto *op : info.matchedOps) {
     int blockId = bm.getBlockIdByOp(op);
     if (blockId == -1) {
       LOG_DEBUG("Op has no block_id");
@@ -158,55 +160,44 @@ bool MoveLoadIntoUserPass::checkAllOpsInSameBlock(
   return true;
 }
 
-bool MoveLoadIntoUserPass::matchLoadPattern(
-    memref::CopyOp copyOp, SmallVector<Operation *> &matchedOps) {
+bool MoveLoadIntoUserPass::matchLoadPattern(LoadPatternInfo &info) {
   // Step 1: Check if source is from global memory
-  Value source = copyOp.getSource();
-  auto viewOp = source.getDefiningOp<ViewLikeOpInterface>();
-  if (!viewOp) {
-    LOG_DEBUG("Copy source is not from ViewLikeOpInterface");
-    return false;
-  }
-
   SetVector<Operation *> sourceViewOps;
-  if (!CVPipeline::isSubviewFromGlobalMemory(viewOp, sourceViewOps)) {
+  if (!CVPipeline::collectViewOpsAndCheckGlobalMemory(info.copyOp.getSource(), sourceViewOps)) {
     LOG_DEBUG("Copy source is not from global memory");
     return false;
   }
 
   // Step 2: Find the pattern: reinterpret_cast/alloc -> memref.copy ->
   // to_tensor Get the reinterpret_cast (or alloc)
-  Operation *destOp = nullptr;
-  Value dest = copyOp.getTarget();
+  Value dest = info.copyOp.getTarget();
 
   // Check if dest is alloc
   if (auto allocOp = dest.getDefiningOp<memref::AllocOp>()) {
-    destOp = allocOp;
+    info.allocOp = allocOp;
   } else {
     LOG_DEBUG("Copy dest is not from alloc");
     return false;
   }
 
   // Step 3: Find the to_tensor op
-  bufferization::ToTensorOp toTensorOp = nullptr;
-  for (auto *user : destOp->getUsers()) {
+  for (auto *user : info.allocOp->getUsers()) {
     auto toTensor = dyn_cast<bufferization::ToTensorOp>(user);
     if (toTensor) {
-      toTensorOp = toTensor;
+      info.toTensorOp = toTensor;
       break;
     }
   }
 
-  if (!toTensorOp) {
+  if (!info.toTensorOp) {
     LOG_DEBUG("No to_tensor op found after copy");
     return false;
   }
 
-  // Collect matched ops: viewOp (source), destOp, copyOp, toTensor
-  matchedOps.push_back(viewOp);
-  matchedOps.push_back(destOp);
-  matchedOps.push_back(copyOp);
-  matchedOps.push_back(toTensorOp);
+  // Collect matched ops: destOp, copyOp, toTensor
+  info.matchedOps.push_back(info.allocOp);
+  info.matchedOps.push_back(info.copyOp);
+  info.matchedOps.push_back(info.toTensorOp);
 
   return true;
 }
@@ -247,32 +238,20 @@ void MoveLoadIntoUserPass::runOnOperation() {
   LOG_DEBUG("before MogeLoadIntoUserPass ....\n" << *module);
 
   module.walk([&](memref::CopyOp copyOp) {
-    // Step 1: Check if source is from global memory
-    LOG_DEBUG("Check copyOp = " << copyOp);
-    Value source = copyOp.getSource();
-    auto viewOp = source.getDefiningOp<ViewLikeOpInterface>();
-    if (!viewOp) {
+    // Step 1: Match the load pattern and collect 4 ops
+    LoadPatternInfo info;
+    info.copyOp = copyOp;
+    if (!matchLoadPattern(info)) {
       return;
     }
 
-    SetVector<Operation *> viewOps;
-    if (!CVPipeline::isSubviewFromGlobalMemory(viewOp, viewOps)) {
-      return;
-    }
-
-    // Step 2: Match the load pattern and collect 4 ops
-    SmallVector<Operation *> matchedOps;
-    if (!matchLoadPattern(copyOp, matchedOps)) {
-      return;
-    }
-
-    // Step 3: Check if all 4 ops are in the same block
-    if (!checkAllOpsInSameBlock(matchedOps, bm)) {
+    // Step 2: Check if all 3 ops are in the same block
+    if (!checkAllOpsInSameBlock(info, bm)) {
       return;
     }
     LOG_DEBUG("valid pattern.");
     // Store the valid pattern
-    validPatterns.push_back({matchedOps, bm.getBlockIdByOp(copyOp)});
+    validPatterns.push_back(info);
   });
 
   // Process each valid pattern
@@ -281,8 +260,7 @@ void MoveLoadIntoUserPass::runOnOperation() {
     int commonBlockId = pattern.commonBlockId;
 
     // Find first user of to_tensor
-    auto toTensorOp = cast<bufferization::ToTensorOp>(matchedOps.back());
-    auto firstUserOpt = getFirstUser(toTensorOp, bm, matchedOps);
+    auto firstUserOpt = getFirstUser(pattern.toTensorOp, bm, matchedOps);
     if (!firstUserOpt) {
       continue;
     }
@@ -297,8 +275,7 @@ void MoveLoadIntoUserPass::runOnOperation() {
     CVPipeline::cloneScalarOpsForCrossBlockUses(bm, opsToMove,
                                                 bm.getBlockIdByOp(firstUser));
     // Check for cycles before moving
-    SmallVector<Operation *> opsVec(opsToMove.begin(), opsToMove.end());
-    if (CVPipeline::willCreateCycle(opsVec, memGraph, targetBlockId, bm)) {
+    if (CVPipeline::willCreateCycle(opsToMove.getArrayRef(), memGraph, targetBlockId, bm)) {
       LOG_DEBUG("Moving would create a cycle, skip(" << commonBlockId << ")");
       continue;
     }

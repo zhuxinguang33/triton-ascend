@@ -71,40 +71,38 @@ void BroadcastUBOptPass::runOnOperation() {
   auto &aa = getAnalysis<AliasAnalysis>();
   CVPipeline::MemoryDependenceGraph memGraph(moduleOp, aa);
   CVPipeline::ComputeBlockIdManager bm(moduleOp);
-  LOG_DEBUG("== BroadcastUBOpt Pass Start ==\n");
   LOG_DEBUG(moduleOp);
   moduleOp.walk([&](linalg::BroadcastOp op) {
-    SmallVector<Operation *> users(op->getUsers().begin(),
-                                   op->getUsers().end());
-    if (users.empty())
-      return;
-
-    int firstUserBlockId = bm.getBlockIdByOp(users.front());
-    if (CVPipeline::getOpCoreType(users.front()) !=
-        CVPipeline::CoreType::VECTOR_ONLY)
-      return;
-
     if (CVPipeline::getOpCoreType(op.getOperation()) !=
         CVPipeline::CoreType::VECTOR_ONLY)
       return;
-
-    bool allUsersSameBlock = llvm::all_of(users, [&](Operation *user) {
-      return bm.getBlockIdByOp(user) == firstUserBlockId;
-    });
-
-    if (!allUsersSameBlock)
+    if (op->getUsers().empty())
       return;
 
-    LOG_DEBUG("broadcast " << op << " \n all users in same block "
+    // Just Simple scenario: 
+    // brc's user all in same Block and in same block id.
+    Operation* oneUser = *op->getUsers().begin();
+    if(oneUser->getBlock() != op->getBlock()){
+      return;
+    }
+    int firstUserBlockId = bm.getBlockIdByOp(oneUser);
+    if (firstUserBlockId==-1 || CVPipeline::getOpCoreType(oneUser) !=
+        CVPipeline::CoreType::VECTOR_ONLY){
+      // No blcok Id (means control flow) && not vector: skip;
+      // vector only control flow should skip too.
+      return;
+    }
+    bool allUsersSameBlock = llvm::all_of(op->getUsers(), [&](Operation *user) {
+      return bm.getBlockIdByOp(user) == firstUserBlockId;
+    });
+    if (!allUsersSameBlock)
+      return;
+    LOG_DEBUG("broadcast " << *op << " \n all users in same block "
                            << firstUserBlockId << "\n");
 
     int broadcastBlockId = bm.getBlockIdByOp(op.getOperation());
     if (broadcastBlockId == firstUserBlockId) {
       LOG_DEBUG("broadcast already in same block, skip\n");
-      return;
-    }
-
-    if (op->getBlock() != users.front()->getBlock()) {
       return;
     }
 
@@ -114,11 +112,9 @@ void BroadcastUBOptPass::runOnOperation() {
       LOG_DEBUG("would create cycle, skip\n");
       return;
     }
-
     LOG_DEBUG("moving broadcast to block " << firstUserBlockId << "\n");
     bm.updateBlockId(op, firstUserBlockId);
   });
-  LOG_DEBUG("== BroadcastUBOpt Pass complete ==\n");
 }
 
 std::unique_ptr<OperationPass<ModuleOp>> createBroadcastUBOptPass() {

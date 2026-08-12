@@ -20,13 +20,11 @@
  * THE SOFTWARE.
  */
 
-#include "DynamicCVPipeline/Common/MemoryEffectsTracker.h"
 #include "DynamicCVPipeline/Common/Utils.h"
 #include "ascend/include/DynamicCVPipeline/ComputeBlockOpt/Common.h"
 #include "ascend/include/DynamicCVPipeline/ComputeBlockOpt/Passes.h"
 #include "ascend/include/DynamicCVPipeline/PlanComputeBlock/Common.h"
 #include "ascend/include/DynamicCVPipeline/PlanComputeBlock/ComputeBlockIdManager.h"
-#include "mlir/Analysis/AliasAnalysis.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/IR/BuiltinAttributes.h"
 #include "mlir/IR/BuiltinTypes.h"
@@ -97,10 +95,7 @@ namespace triton {
 
 void SinkI1ProducersIntoUsersPass::runOnOperation() {
   ModuleOp moduleOp = getOperation();
-  auto &aa = getAnalysis<AliasAnalysis>();
-  CVPipeline::MemoryDependenceGraph memGraph(moduleOp, aa);
   CVPipeline::ComputeBlockIdManager bm(moduleOp);
-  LOG_DEBUG("== SinkI1ProducersIntoUsers Pass Start ==\n");
   LOG_DEBUG(moduleOp);
 
   SmallVector<Operation *> producers;
@@ -120,19 +115,19 @@ void SinkI1ProducersIntoUsersPass::runOnOperation() {
   });
 
   for (Operation *p : producers) {
-
+    DenseSet<int> seenBlockIds;
     for (OpOperand &use : p->getUses()) {
       Operation *consumer = use.getOwner();
-
       if (bm.isSameBlock(p, consumer)) {
         continue;
       }
 
       // clone producer op to consumer block and adapt use
       int consumerBlockId = bm.getBlockIdByOp(consumer);
-      Operation *cloned = p->clone();
-      consumer->getBlock()->push_back(cloned);
-      cloned->moveBefore(consumer);
+      if (!seenBlockIds.insert(consumerBlockId).second){
+        continue;
+      }
+      Operation *cloned = OpBuilder(consumer).clone(*p);
       use.set(cloned->getResult(0));
       bm.updateBlockId(cloned, consumerBlockId);
     }
@@ -141,7 +136,6 @@ void SinkI1ProducersIntoUsersPass::runOnOperation() {
     if (p->use_empty())
       p->erase();
   }
-  LOG_DEBUG("== SinkI1ProducersIntoUsers Pass Complete ==\n");
 }
 
 std::unique_ptr<OperationPass<ModuleOp>> createSinkI1ProducersIntoUsersPass() {

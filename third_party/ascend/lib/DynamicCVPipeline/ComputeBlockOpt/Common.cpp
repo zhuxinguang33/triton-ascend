@@ -183,7 +183,7 @@ bool willCreateCycle(llvm::ArrayRef<Operation *> opsToUnify,
   return hasCycle;
 }
 
-void cloneScalarOpsForCrossBlockUses(ComputeBlockIdManager &bmOriginal,
+void cloneScalarOpsForCrossBlockUses(ComputeBlockIdManager &bm,
                                      SetVector<Operation *> &matchedOps,
                                      int targetBlockId) {
 
@@ -202,7 +202,7 @@ void cloneScalarOpsForCrossBlockUses(ComputeBlockIdManager &bmOriginal,
         if (!userInBlock)
           continue;
         if (llvm::find(matchedOps, userInBlock) == matchedOps.end() &&
-            bmOriginal.getBlockIdByOp(userInBlock) != targetBlockId) {
+            bm.getBlockIdByOp(userInBlock) != targetBlockId) {
           otherUses.push_back(&use);
         }
       }
@@ -210,7 +210,7 @@ void cloneScalarOpsForCrossBlockUses(ComputeBlockIdManager &bmOriginal,
         LOG_DEBUG("now cloned: " << *op);
         OpBuilder builder(op);
         auto clonedOp = builder.clone(*op);
-        bmOriginal.updateBlockId(clonedOp, bmOriginal.getBlockIdByOp(op));
+        bm.updateBlockId(clonedOp, bm.getBlockIdByOp(op));
         for (auto use : otherUses) {
           (*use).set(clonedOp->getResult(0));
         }
@@ -219,17 +219,14 @@ void cloneScalarOpsForCrossBlockUses(ComputeBlockIdManager &bmOriginal,
   }
 }
 
-bool isSubviewFromGlobalMemory(ViewLikeOpInterface viewOp,
-                               SetVector<Operation *> &matchedOps) {
+bool collectViewOpsAndCheckGlobalMemory(Value viewValue,
+                                        SetVector<Operation *> &matchedOps) {
   // Subview ops may be nested many layers deep through reinterpretation or
   // other subviews. like, subview (subview (reinterpret_cast (subview
   // (reinterpret_cast (arg0))))) so we need Search and only keep same block
   // view-like op.
-  Value source = viewOp.getViewSource();
-  auto block = viewOp->getBlock();
-  LOG_DEBUG("Check view source: " << source << "\n");
-  while (true) {
-    if (auto blockArg = dyn_cast<BlockArgument>(source)) {
+  auto isFuncArg = [&](Value v) {
+    if (auto blockArg = dyn_cast<BlockArgument>(v)) {
       Operation *parentOp = blockArg.getOwner()->getParentOp();
       if (isa<func::FuncOp>(parentOp)) {
         return true;
@@ -239,16 +236,37 @@ bool isSubviewFromGlobalMemory(ViewLikeOpInterface viewOp,
         return false;
       }
     }
+    return false;
+  };
+  if (isFuncArg(viewValue)) {
+    return true;
+  }
+
+  auto viewOp = viewValue.getDefiningOp<ViewLikeOpInterface>();
+  if (!viewOp) {
+    return false;
+  }
+  auto block = viewOp->getBlock();
+  LOG_DEBUG("Check view source: " << viewValue);
+  while (true) {
+
+    if (isFuncArg(viewValue)) {
+      return true;
+    }
+    if (!viewValue.getDefiningOp()) {
+      return false;
+    }
     // From other view-like op
-    if (auto viewLike = dyn_cast<ViewLikeOpInterface>(source.getDefiningOp())) {
+    if (auto viewLike =
+            dyn_cast<ViewLikeOpInterface>(viewValue.getDefiningOp())) {
       if (viewLike->getBlock() == block) {
         matchedOps.insert(viewLike.getOperation());
       }
-      source = viewLike.getViewSource();
+      viewValue = viewLike.getViewSource();
       continue;
     }
     LOG_DEBUG(
-        "Subview source defining op is not ViewLikeOpInterface: " << source);
+        "Subview source defining op is not ViewLikeOpInterface: " << viewValue);
     return false;
   }
   return false;
