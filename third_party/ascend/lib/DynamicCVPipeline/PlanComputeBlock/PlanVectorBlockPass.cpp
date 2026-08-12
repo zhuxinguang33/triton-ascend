@@ -239,11 +239,13 @@ collectKeepOpsToCube(Block *block, SmallVector<Operation *> toProcess,
     }
     keepOps.insert(op);
 
-    depHelper.forEachSource<true>(op, [&](Operation *source) {
-      if (!keepOps.contains(source) && llvm::is_contained(fuseGroup, source)) {
-        toProcess.push_back(source);
-      }
-    });
+    depHelper.forEachSource<DependencyHelper::SourceMode::AcrossIterArg>(
+        op, [&](Operation *source) {
+          if (!keepOps.contains(source) &&
+              llvm::is_contained(fuseGroup, source)) {
+            toProcess.push_back(source);
+          }
+        });
   }
 
   // special case: annotation.mark always follows the defining op
@@ -668,7 +670,8 @@ void PlanVectorBlockPass::runOnOperation() {
     return WalkResult::advance();
   });
   if (result.wasInterrupted()) {
-    signalPassFailure();
+    LOG_DEBUG("Failed to plan vector block id for block\n");
+    CVPipeline::setFallbackAttr(moduleOp, CVPipeline::ERRCODE_FAILED);
   }
 }
 
