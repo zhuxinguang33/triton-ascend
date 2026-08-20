@@ -64,6 +64,7 @@ inline constexpr llvm::StringLiteral kMemCrossDeps = "ssbuffer.memCrossDeps";
 inline constexpr llvm::StringLiteral kDepMark = "ssbuffer.dep_mark";
 inline constexpr llvm::StringLiteral kMayNotExec = "ssbuffer.may_not_exec";
 inline constexpr llvm::StringLiteral kCoupledMatmulAndStore = "ssbuffer.coupled_matmul_and_store";
+inline constexpr llvm::StringLiteral kMatmulExecState = "ssbuffer.matmul_exec_state";
 inline constexpr llvm::StringLiteral kIterCounter = "ssbuffer.iterCounter";
 inline constexpr llvm::StringLiteral kClone = "ssbuffer.clone";
 inline constexpr llvm::StringLiteral kInsertionOptimization =
