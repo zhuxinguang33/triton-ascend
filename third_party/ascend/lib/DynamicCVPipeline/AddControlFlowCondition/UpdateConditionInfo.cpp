@@ -242,7 +242,7 @@ static int buildWhileCounterCondition(
 SmallVector<SmallVector<Value>>
 UpdateConditionInfoPass::allocSSBuffer(ModuleOp module) {
   OpBuilder builder(module.getContext());
-  auto i64Type = builder.getIntegerType(ADDR_INT_TYPE);
+  auto i64Type = builder.getIntegerType(SSBufferManager::ADDR_INT_TYPE);
   auto i32Type = builder.getIntegerType(CONST_INT_TYPE);
   auto memrefType = getSsbufMemrefType(builder);
 
@@ -635,15 +635,15 @@ UpdateConditionInfoPass::computeVectorSSBufferMemrefs(
   builder.setInsertionPointToStart(&scopeOp->getRegion(0).front());
   int vec1Offset = 1024;
   Value vec1OffsetValue = builder.create<arith::ConstantIntOp>(
-      loc, VECTOR_SSBUF_OFFSET, ADDR_INT_TYPE);
+      loc, VECTOR_SSBUF_OFFSET, SSBufferManager::ADDR_INT_TYPE);
   auto subIdOp = builder.create<GetSubBlockIdxOp>(
-      loc, builder.getIntegerType(ADDR_INT_TYPE));
+      loc, builder.getIntegerType(SSBufferManager::ADDR_INT_TYPE));
   Value ssbAddrOffset =
       builder.create<arith::MulIOp>(loc, subIdOp, vec1OffsetValue);
 
   for (int groupIdx : allGroupIndices) {
     auto ssbBaseAddr = builder.create<arith::ConstantIntOp>(
-        loc, groupIdx * VALUE_SSBUF_OFFSET, ADDR_INT_TYPE);
+        loc, groupIdx * VALUE_SSBUF_OFFSET, SSBufferManager::ADDR_INT_TYPE);
     auto ssbAddr =
         builder.create<arith::AddIOp>(loc, ssbBaseAddr, ssbAddrOffset);
     Value memref = builder.create<PointerCastOp>(

@@ -54,6 +54,7 @@
 
 #include "ascend/include/DynamicCVPipeline/Common/Utils.h"
 #include "ascend/include/DynamicCVPipeline/StandardizeOp/PatternMatchRewrites.h"
+#include "ascend/include/DynamicCVPipeline/Common/SSBufferManager.h"
 
 #include "DynamicCVPipeline/PlanComputeBlock/Common.h"
 #include "bishengir/Dialect/HIVM/IR/HIVMImpl.h"
@@ -86,6 +87,9 @@ struct SplitInfo {
   bool shouldSplit;
   fixpipeDst fixpipeDst = fixpipeDst::Unknown;
 };
+
+// SSBuffer manager for MNE counter address allocation
+static SSBufferManager ssbufManager;
 
 // Map to store matmul execution state variables for cascaded matmul support
 // Key: matmul operation, Value: execution state variable (i1)
@@ -757,36 +761,34 @@ static void insertMNEGuardL0C(linalg::MatmulOp matmulOp, PatternRewriter &rewrit
   // Generate unique tag for this matmul-store pair
   int coupledId = SplitMatmulPattern::getNextCoupledMatmulAndStoreId();
 
-  // Block 1: Create counter memref in SSBUF (addr=11)
-  rewriter.setInsertionPoint(forOp);
-  auto i32Type = rewriter.getI32Type();
-  auto ssbufAddrSpaceAttr = rewriter.getAttr<hivm::AddressSpaceAttr>(hivm::AddressSpace::SSBUF);
-  auto counterType = MemRefType::get({}, i32Type, nullptr, ssbufAddrSpaceAttr);
-  auto counterAlloc = rewriter.create<memref::AllocOp>(loc, counterType);
+  // Allocate MNE counter address (2560-3072 range)
+  auto addrResult = ssbufManager.allocateMNECounterAddr();
+  if (!addrResult) {
+    LOG_DEBUG("Failed to allocate MNE counter address for " << matmulOp);
+    return;
+  }
+  int64_t counterAddr = addrResult.value();
 
   // Initialize counter to 0 before loop
-  auto c0 = rewriter.create<arith::ConstantIntOp>(loc, 0, 32);
-  rewriter.create<memref::StoreOp>(loc, c0, counterAlloc.getMemref(), ValueRange{});
+  rewriter.setInsertionPoint(forOp);
+  auto [addrConst, pointerCastOp] = 
+      getSsbufConstAndPointerCast(rewriter, loc, counterAddr, rewriter.getI32Type());
+  Value counterMemref = pointerCastOp.getResult();
 
-  // Block 2: Inside loop - write 1 to counter after matmul executes
+  auto c0 = rewriter.create<arith::ConstantIntOp>(loc, 0, 32);
+  rewriter.create<memref::StoreOp>(loc, c0, counterMemref, ValueRange{});
+
+  // Inside loop - write 1 to counter after matmul executes
   auto *forBody = forOp.getBody();
   auto yieldOp = cast<scf::YieldOp>(forBody->getTerminator());
   rewriter.setInsertionPoint(yieldOp);
   auto c1 = rewriter.create<arith::ConstantIntOp>(loc, 1, 32);
-  auto storeC1Op = rewriter.create<memref::StoreOp>(loc, c1, counterAlloc.getMemref(), ValueRange{});
+  auto storeC1Op = rewriter.create<memref::StoreOp>(loc, c1, counterMemref, ValueRange{});
   storeC1Op->setAttr(mlir::CVPipeline::kCoupledMatmulAndStore, rewriter.getI32IntegerAttr(coupledId));
   matmulOp->setAttr(mlir::CVPipeline::kCoupledMatmulAndStore, rewriter.getI32IntegerAttr(coupledId));
 
-  // Block 3: After loop - read counter, create arith.cmpi eq as execution state
-  rewriter.setInsertionPointAfter(forOp);
-//   auto c0 = rewriter.create<arith::ConstantIntOp>(loc, 1, 32);
-//   auto loadCounter =
-//       rewriter.create<memref::LoadOp>(loc, counterAlloc.getMemref(), ValueRange{});
-//   auto hasExec = rewriter.create<arith::CmpIOp>(loc, arith::CmpIPredicate::ne,
-//                                                   loadCounter, c0);
-
-  // Store execution state variable in map for downstream matmul to use
-  matmulExecStateMap[matmulOp] = counterAlloc.getMemref();
+  // Store counter memref in map for downstream matmul to use
+  matmulExecStateMap[matmulOp] = counterMemref;
   matmulOp->setAttr(mlir::CVPipeline::kMatmulExecState, rewriter.getUnitAttr());
   
   // Mark for loop with matmul limited to CUBE
@@ -806,30 +808,37 @@ static void insertMNEGuardUB(linalg::MatmulOp matmulOp, PatternRewriter &rewrite
   // Generate unique tag for this matmul-store pair
   int coupledId = SplitMatmulPattern::getNextCoupledMatmulAndStoreId();
 
-  // Block 1: Create counter memref in SSBUF (addr=11)
+  // Allocate MNE counter address (2560-3072 range)
+  auto addrResult = ssbufManager.allocateMNECounterAddr();
+  if (!addrResult) {
+    LOG_DEBUG("Failed to allocate MNE counter address for " << matmulOp);
+    return;
+  }
+  int64_t counterAddr = addrResult.value();
+
+  // Create address constant and pointer_cast to get memref<i32, SSBUF>
   rewriter.setInsertionPoint(forOp);
-  auto i32Type = rewriter.getI32Type();
-  auto ssbufAddrSpaceAttr = rewriter.getAttr<hivm::AddressSpaceAttr>(hivm::AddressSpace::SSBUF);
-  auto counterType = MemRefType::get({}, i32Type, nullptr, ssbufAddrSpaceAttr);
-  auto counterAlloc = rewriter.create<memref::AllocOp>(loc, counterType);
+  auto [addrConst, pointerCastOp] = 
+      getSsbufConstAndPointerCast(rewriter, loc, counterAddr, rewriter.getI32Type());
+  Value counterMemref = pointerCastOp.getResult();
 
   // Initialize counter to 0 before loop
   auto c0 = rewriter.create<arith::ConstantIntOp>(loc, 0, 32);
-  rewriter.create<memref::StoreOp>(loc, c0, counterAlloc.getMemref(), ValueRange{});
+  rewriter.create<memref::StoreOp>(loc, c0, counterMemref, ValueRange{});
 
-  // Block 2: Inside loop - write 1 to counter after matmul executes
+  // Inside loop - write 1 to counter after matmul executes
   auto *forBody = forOp.getBody();
   auto yieldOp = cast<scf::YieldOp>(forBody->getTerminator());
   rewriter.setInsertionPoint(yieldOp);
   auto c1 = rewriter.create<arith::ConstantIntOp>(loc, 1, 32);
-  auto storeC1Op = rewriter.create<memref::StoreOp>(loc, c1, counterAlloc.getMemref(), ValueRange{});
+  auto storeC1Op = rewriter.create<memref::StoreOp>(loc, c1, counterMemref, ValueRange{});
   storeC1Op->setAttr(mlir::CVPipeline::kCoupledMatmulAndStore, rewriter.getI32IntegerAttr(coupledId));
   matmulOp->setAttr(mlir::CVPipeline::kCoupledMatmulAndStore, rewriter.getI32IntegerAttr(coupledId));
 
-  // Block 3: After loop - read counter, create scf.if to select result or zero-fill
+  // After loop - read counter, create scf.if to select result or zero-fill
   rewriter.setInsertionPointAfter(forOp);
   auto loadCounter =
-      rewriter.create<memref::LoadOp>(loc, counterAlloc.getMemref(), ValueRange{});
+      rewriter.create<memref::LoadOp>(loc, counterMemref, ValueRange{});
   auto hasExec = rewriter.create<arith::CmpIOp>(loc, arith::CmpIPredicate::ne,
                                                   loadCounter, c0);
 
@@ -841,21 +850,21 @@ static void insertMNEGuardUB(linalg::MatmulOp matmulOp, PatternRewriter &rewrite
   Value finalHasExec = hasExec;
   for (auto upstreamMatmul : upstreamChain) {
     if (matmulExecStateMap.count(upstreamMatmul)) {
-      // Get upstream counter alloc from map
-      Value upstreamCounterAlloc = matmulExecStateMap[upstreamMatmul];
+      // Get upstream counter memref from map
+      Value upstreamCounterMemref = matmulExecStateMap[upstreamMatmul];
 
       // Load upstream counter
       auto upstreamLoadCounter = rewriter.create<memref::LoadOp>(
-      loc, upstreamCounterAlloc, ValueRange{});
+          loc, upstreamCounterMemref, ValueRange{});
 
       // Create arith.cmpi ne to check if upstream matmul executed
       auto upstreamHasExec = rewriter.create<arith::CmpIOp>(
-      loc, arith::CmpIPredicate::ne, upstreamLoadCounter, c0);
+          loc, arith::CmpIPredicate::ne, upstreamLoadCounter, c0);
 
       // AND with current execution state
       finalHasExec = rewriter.create<arith::OrIOp>(loc, finalHasExec, upstreamHasExec);
+    }
   }
-}
 
   // Create zero fill value for else branch (same shape/type as output)
   auto emptyOp = rewriter.create<tensor::EmptyOp>(loc, resultType.getShape(),
@@ -884,7 +893,7 @@ static void insertMNEGuardUB(linalg::MatmulOp matmulOp, PatternRewriter &rewrite
     return !isa<scf::YieldOp>(opnd.getOwner());
   });
 
-  // Mark for loop with matmul limited to CUBE
+// Mark for loop with matmul limited to CUBE
   forOp->setAttr(mlir::CVPipeline::kHIVMMatmulLimitedInCubeAttr, rewriter.getUnitAttr());
 }
 
