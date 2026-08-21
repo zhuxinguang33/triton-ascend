@@ -54,6 +54,7 @@
 
 #include "ascend/include/DynamicCVPipeline/Common/Utils.h"
 #include "ascend/include/DynamicCVPipeline/StandardizeOp/PatternMatchRewrites.h"
+#include "ascend/include/DynamicCVPipeline/Common/SSBufferManager.h"
 
 #include "DynamicCVPipeline/PlanComputeBlock/Common.h"
 #include "bishengir/Dialect/HIVM/IR/HIVMImpl.h"
@@ -86,6 +87,9 @@ struct SplitInfo {
   bool shouldSplit;
   fixpipeDst fixpipeDst = fixpipeDst::Unknown;
 };
+
+// SSBuffer manager for MNE counter address allocation
+static SSBufferManager ssbufManager;
 
 // Map to store matmul execution state variables for cascaded matmul support
 // Key: matmul operation, Value: execution state variable (i1)
@@ -802,30 +806,37 @@ static void insertMNEGuardUB(linalg::MatmulOp matmulOp, PatternRewriter &rewrite
   // Generate unique tag for this matmul-store pair
   int coupledId = SplitMatmulPattern::getNextCoupledMatmulAndStoreId();
 
+  // Allocate MNE counter address (2560-3072 range)
+  auto addrResult = ssbufManager.allocateMNECounterAddr();
+  if (!addrResult) {
+    LOG_DEBUG("Failed to allocate MNE counter address for " << matmulOp);
+    return;
+  }
+  int64_t counterAddr = addrResult.value();
+
   // Block 1: Create counter memref in SSBUF (addr=11)
   rewriter.setInsertionPoint(forOp);
-  auto i32Type = rewriter.getI32Type();
-  auto ssbufAddrSpaceAttr = rewriter.getAttr<hivm::AddressSpaceAttr>(hivm::AddressSpace::SSBUF);
-  auto counterType = MemRefType::get({}, i32Type, nullptr, ssbufAddrSpaceAttr);
-  auto counterAlloc = rewriter.create<memref::AllocOp>(loc, counterType);
+  auto [addrConst, pointerCastOp] = 
+      getSsbufConstAndPointerCast(rewriter, loc, counterAddr, rewriter.getI32Type());
+  Value counterMemref = pointerCastOp.getResult();
 
   // Initialize counter to 0 before loop
   auto c0 = rewriter.create<arith::ConstantIntOp>(loc, 0, 32);
-  rewriter.create<memref::StoreOp>(loc, c0, counterAlloc.getMemref(), ValueRange{});
+  rewriter.create<memref::StoreOp>(loc, c0, counterMemref, ValueRange{});
 
   // Block 2: Inside loop - write 1 to counter after matmul executes
   auto *forBody = forOp.getBody();
   auto yieldOp = cast<scf::YieldOp>(forBody->getTerminator());
   rewriter.setInsertionPoint(yieldOp);
   auto c1 = rewriter.create<arith::ConstantIntOp>(loc, 1, 32);
-  auto storeC1Op = rewriter.create<memref::StoreOp>(loc, c1, counterAlloc.getMemref(), ValueRange{});
+  auto storeC1Op = rewriter.create<memref::StoreOp>(loc, c1, counterMemref, ValueRange{});
   storeC1Op->setAttr(mlir::CVPipeline::kCoupledMatmulAndStore, rewriter.getI32IntegerAttr(coupledId));
   matmulOp->setAttr(mlir::CVPipeline::kCoupledMatmulAndStore, rewriter.getI32IntegerAttr(coupledId));
 
   // Block 3: After loop - read counter, create scf.if to select result or zero-fill
   rewriter.setInsertionPointAfter(forOp);
   auto loadCounter =
-      rewriter.create<memref::LoadOp>(loc, counterAlloc.getMemref(), ValueRange{});
+      rewriter.create<memref::LoadOp>(loc, counterMemref, ValueRange{});
   auto hasExec = rewriter.create<arith::CmpIOp>(loc, arith::CmpIPredicate::ne,
                                                   loadCounter, c0);
 
