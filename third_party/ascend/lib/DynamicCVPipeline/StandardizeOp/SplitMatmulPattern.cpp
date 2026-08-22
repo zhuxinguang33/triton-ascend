@@ -866,6 +866,11 @@ static void insertMNEGuardUB(linalg::MatmulOp matmulOp, PatternRewriter &rewrite
     }
   }
 
+  // Create if: then returns real result, else returns zero fill
+  auto ifOp = rewriter.create<scf::IfOp>(loc, resultType, finalHasExec, true);
+  rewriter.setInsertionPointToStart(&ifOp.getThenRegion().front());
+  rewriter.create<scf::YieldOp>(loc, splitInfo.outerOutValue);
+  rewriter.setInsertionPointToStart(&ifOp.getElseRegion().front());
   // Create zero fill value for else branch (same shape/type as output)
   auto emptyOp = rewriter.create<tensor::EmptyOp>(loc, resultType.getShape(),
                                                   resultType.getElementType());
@@ -880,12 +885,6 @@ static void insertMNEGuardUB(linalg::MatmulOp matmulOp, PatternRewriter &rewrite
     auto fillOp = rewriter.create<linalg::FillOp>(loc, zeroVal, emptyOp.getResult());
     zeroFill = fillOp.getResult(0);
   }
-
-  // Create if: then returns real result, else returns zero fill
-  auto ifOp = rewriter.create<scf::IfOp>(loc, resultType, finalHasExec, true);
-  rewriter.setInsertionPointToStart(&ifOp.getThenRegion().front());
-  rewriter.create<scf::YieldOp>(loc, splitInfo.outerOutValue);
-  rewriter.setInsertionPointToStart(&ifOp.getElseRegion().front());
   rewriter.create<scf::YieldOp>(loc, zeroFill);
 
   // Replace uses of outerOutValue except yields
