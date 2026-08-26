@@ -27,6 +27,7 @@
 #include "ascend/include/DynamicCVPipeline/Common/Utils.h"
 #include "ascend/include/DynamicCVPipeline/ComputeBlockOpt/Passes.h"
 #include "ascend/include/DynamicCVPipeline/PlanComputeBlockPass.h"
+#include "ascend/include/DynamicCVPipeline/ComputeBlockOpt/MergeCubeBlockPass.h"
 
 #include "mlir/Pass/PassManager.h"
 
@@ -75,6 +76,10 @@ void ComputeBlockOptPass::runOnOperation() {
   pm.addPass(createMergeComputeBlockPass());
   pm.addPass(createReorderOpsByBlockIdPass());
 
+  // Merge cube blocks with same loaded data
+  pm.addPass(createMergeCubeBlockPass());
+  pm.addPass(createReorderOpsByBlockIdPass());
+
   if (failed(runPipeline(pm, module))) {
     if (!CVPipeline::hasFallbackAttr(module)) {
       CVPipeline::setFallbackAttr(module, CVPipeline::ERRCODE_FAILED);
@@ -107,6 +112,7 @@ void registerComputeBlockOptPasses() {
   registerPass(createPosMaskPatternPass);
   registerPass(createMergeSmallBlockPass);
   registerPass(createMergeComputeBlockPass);
+  registerPass(createMergeCubeBlockPass);
 }
 
 } // namespace triton

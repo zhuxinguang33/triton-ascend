@@ -181,7 +181,7 @@ public:
     });
 
     for (scf::ForOp forOp : cubeForOps) {
-      tryMergeCubeFor(forOp, memGraph, bm);
+      tryMergeCubeFor(forOp, memGraph, bm); 
     }
 
     LOG_DEBUG("After: " << *module);
