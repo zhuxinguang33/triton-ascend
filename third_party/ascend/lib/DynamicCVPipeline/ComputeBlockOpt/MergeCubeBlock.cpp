@@ -246,6 +246,17 @@ bool MergeCubeBlockPass::canMergeBlocks(BlockNode *target, BlockNode *source,
     return false;
   }
 
+  // Step 1.5: Two cube blocks with strictly identical (opposite-type)
+  // predecessors and successors can always be merged. This overlaps with
+  // hasSameDepth below, but is kept explicit because it makes the merge
+  // decision directly observable from the dependency graph without having
+  // to reason about depth propagation.
+  if (checkSameSourceAndSink(target, source, graph)) {
+    LDBG("Blocks " << target->blockId << " and " << source->blockId
+                   << " can merge: same source and sink\n");
+    return true;
+  }
+
   // Step 2: Check if merging would create a cycle
   if (!checkNoCycle(target, source, graph, memGraph, bm)) {
     LDBG("Blocks " << target->blockId << " and " << source->blockId
@@ -263,6 +274,28 @@ bool MergeCubeBlockPass::canMergeBlocks(BlockNode *target, BlockNode *source,
   LDBG("Blocks " << target->blockId << " and " << source->blockId
                  << " cannot merge: unsupport scenario\n");
   return false;
+}
+
+bool MergeCubeBlockPass::checkSameSourceAndSink(BlockNode *node1,
+                                                BlockNode *node2,
+                                                BlockDependencyGraph &graph) {
+
+  if (!node1 || !node2)
+    return false;
+
+  // Collect the opposite-type neighbours of each node. Two cube blocks
+  // can be merged trivially when they sit between the exact same set of
+  // vector inputs and vector outputs.
+  auto filteredPreds1 =
+      getBlocksOfDifferentType(node1, graph.getPredecessors(node1));
+  auto filteredPreds2 =
+      getBlocksOfDifferentType(node2, graph.getPredecessors(node2));
+  auto filteredSuccs1 =
+      getBlocksOfDifferentType(node1, graph.getSuccessors(node1));
+  auto filteredSuccs2 =
+      getBlocksOfDifferentType(node2, graph.getSuccessors(node2));
+
+  return filteredPreds1 == filteredPreds2 && filteredSuccs1 == filteredSuccs2;
 }
 
 bool MergeCubeBlockPass::hasSameDepth(BlockNode *node1, BlockNode *node2,

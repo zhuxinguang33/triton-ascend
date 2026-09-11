@@ -72,6 +72,8 @@ private:
 
   bool hasCommonInputOrOutput(BlockNode *node1, BlockNode *node2,
                               BlockDependencyGraph &graph);
+  bool checkSameSourceAndSink(BlockNode *node1, BlockNode *node2,
+                              BlockDependencyGraph &graph);
   bool hasSameDepth(BlockNode *node1, BlockNode *node2,
                     BlockDependencyGraph &graph);
   bool checkNoCycle(BlockNode *node1, BlockNode *node2,
