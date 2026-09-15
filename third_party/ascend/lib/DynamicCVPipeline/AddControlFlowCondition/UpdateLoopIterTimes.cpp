@@ -1119,6 +1119,19 @@ int UpdateLoopIterTimesPass::ComputeMainLoopTimes(
         }
       }
 
+      // Add ssbuffer.preload_plus to ifCount when module attribute is set
+      ModuleOp module = forOp->getParentOfType<ModuleOp>();
+      if (module && module->hasAttr(CVPipeline::kPreloadPlus)) {
+        auto preloadAttr =
+            module->getAttrOfType<IntegerAttr>(CVPipeline::kPreloadPlus);
+        if (preloadAttr) {
+          iterInfo.ifCount += preloadAttr.getInt();
+          LDBG("Added ssbuffer.preload_plus (" << preloadAttr.getInt()
+                                               << ") to ifCount, new ifCount="
+                                               << iterInfo.ifCount << "\n");
+        }
+      }
+
       // Calculate factor
       auto [requiredBuffers, x] = calculateFactor(forOp);
       if (requiredBuffers == -1 || x == -1) {

@@ -1185,6 +1185,19 @@ int UpdateConditionInfoPass::setFlowOptCondition(scf::IfOp currentIfOp,
   int optInt =
       std::min(info->intraCoreBufferCount - 1, info->crossCoreBufferCount);
 
+  // Add ssbuffer.preload_plus to optInt when module attribute is set
+  ModuleOp module = currentIfOp->getParentOfType<ModuleOp>();
+  if (module && module->hasAttr(CVPipeline::kPreloadPlus)) {
+    auto preloadAttr =
+        module->getAttrOfType<IntegerAttr>(CVPipeline::kPreloadPlus);
+    if (preloadAttr) {
+      optInt += preloadAttr.getInt();
+      LDBG("Added ssbuffer.preload_plus (" << preloadAttr.getInt()
+                                           << ") to optInt, new optInt="
+                                           << optInt << "\n");
+    }
+  }
+
   auto stepIntType = dyn_cast<IntegerType>(step.getType());
   if (!stepIntType) {
     LDBG("[Error] forOp step is expected to be an integer type, got "

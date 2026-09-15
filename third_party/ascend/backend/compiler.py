@@ -393,6 +393,10 @@ def ttir_to_linalg(mod, metadata, opt, *, named_ops=False):
             metadata["disable_auto_inject_block_sync"] = True
             ascend.passes.ttir.set_enable_cube_block_merge(metadata["enable_cube_block_merge"])
 
+            _preload_plus_val = metadata.get("preload_plus")
+            if _preload_plus_val is not None:
+                ascend.passes.ttir.set_preload_plus(mod, _preload_plus_val)
+
             # Must run before add_dynamic_cv_pipeline because the driven
             # AddMultiBufferInnerScope pass reads the module-level
             # `ssbuffer.insertionOptimization` attribute (set here) at run time.
@@ -1252,6 +1256,7 @@ class NPUOptions:
     enable_vf_fusion: bool = None
     enable_dynamic_cv_pipeline: bool = None
     enable_cube_block_merge: bool = False
+    preload_plus: int = None
     hfusion_enable_multiple_consumer_fusion: bool = None
     buf_slot_num_of_veccore: int = None
     buf_slot_num_of_crosscore: int = None

@@ -230,6 +230,13 @@ void init_triton_ascend_passes_ttir(py::module &&m) {
     moduleop->setAttr(CVPipeline::kInsertionOptimization,
                       builder.getUnitAttr());
   });
+
+  m.def("set_preload_plus", [](mlir::ModuleOp &moduleop, int num) {
+    OpBuilder builder(moduleop.getContext());
+    auto intType = builder.getIntegerType(32);
+    moduleop->setAttr(CVPipeline::kPreloadPlus,
+                      builder.getIntegerAttr(intType, num));
+  });
 }
 
 #if TRITON_ASCEND_HAS_INPROC_COSTMODEL
