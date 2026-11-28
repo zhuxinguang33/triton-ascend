@@ -268,14 +268,18 @@ UpdateConditionInfoPassLegacy::allocSSBuffer(ModuleOp module) {
     return ssbufferMemrefs;
   }
 
-  scope::ScopeOp firstScope, vectorScope;
+  scope::ScopeOp firstScope, cubeScope, vectorScope;
   module.walk<WalkOrder::PreOrder>([&](scope::ScopeOp scopeOp) {
     if (!firstScope)
       firstScope = scopeOp;
     bool isCube, isVector;
-    if (succeeded(getScopeType(scopeOp, isCube, isVector)) && isVector) {
-      vectorScope = scopeOp;
-      return WalkResult::interrupt();
+    if (succeeded(getScopeType(scopeOp, isCube, isVector))) {
+      if (isCube && !cubeScope)
+        cubeScope = scopeOp;
+      if (isVector && !vectorScope)
+        vectorScope = scopeOp;
+      if (cubeScope && vectorScope)
+        return WalkResult::interrupt();
     }
     return WalkResult::advance();
   });
@@ -290,6 +294,17 @@ UpdateConditionInfoPassLegacy::allocSSBuffer(ModuleOp module) {
           builder, loc, VECTOR_SSBUF_OFFSET + i * VALUE_SSBUF_OFFSET);
       ssbufferVec0Memrefs.push_back(memref0.getResult());
       ssbufferVec1Memrefs.push_back(memref1.getResult());
+    }
+  }
+
+  // Initialize both fixed counter banks at Cube entry.
+  if (cubeScope) {
+    builder.setInsertionPointToStart(&cubeScope->getRegion(0).front());
+    auto loc = cubeScope.getLoc();
+    Value zero = builder.create<arith::ConstantIntOp>(loc, 0, CONST_INT_TYPE);
+    for (int i = 0; i < numBuffers; ++i) {
+      builder.create<memref::StoreOp>(loc, zero, ssbufferVec0Memrefs[i]);
+      builder.create<memref::StoreOp>(loc, zero, ssbufferVec1Memrefs[i]);
     }
   }
 

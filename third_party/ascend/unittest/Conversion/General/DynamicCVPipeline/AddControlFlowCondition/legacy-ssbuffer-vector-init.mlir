@@ -2,10 +2,18 @@
 
 // The kernel name selects the legacy pipeline. Cube produces one group for
 // Vector and appears first, so fixed pointers are available to both scopes.
-// Starting a new tile must only clear the current vector sub-block's counter.
+// Cube resets both fixed counters on entry. Vector resets only its local bank.
 // CHECK-LABEL: func.func @_sdpa_infer_kernel(
 // CHECK-NOT: memref.store
+// CHECK: %[[BASE0:.*]] = arith.constant 0 : i64
+// CHECK-NEXT: %[[BANK0:.*]] = hivm.hir.pointer_cast(%[[BASE0]])
+// CHECK-NEXT: %[[BASE1:.*]] = arith.constant 1024 : i64
+// CHECK-NEXT: %[[BANK1:.*]] = hivm.hir.pointer_cast(%[[BASE1]])
+// CHECK-NOT: memref.store
 // CHECK: scope.scope
+// CHECK-NEXT: %[[CUBE_ZERO:.*]] = arith.constant 0 : i32
+// CHECK-NEXT: memref.store %[[CUBE_ZERO]], %[[BANK0]][]
+// CHECK-NEXT: memref.store %[[CUBE_ZERO]], %[[BANK1]][]
 // CHECK-NOT: memref.store
 // CHECK: scf.for
 // CHECK: } {hivm.tcore_type = #hivm.tcore_type<CUBE>}
